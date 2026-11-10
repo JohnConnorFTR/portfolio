@@ -277,7 +277,7 @@
                     <i class="fa-solid fa-sparkles"></i> Demostración En Vivo
                 </div>
                 <h2 class="text-3xl font-bold text-white">Asistente IA de Facundo Rinaldi</h2>
-                <p class="text-slate-400 text-sm mt-2">Hazle preguntas al modelo RAG entrenado sintéticamente sobre la experiencia, stack y proyectos de Facundo.</p>
+                <p class="text-slate-400 text-sm mt-2">Un modelo de lenguaje se descarga y ejecuta localmente en tu navegador. No usa API keys ni envía tus preguntas a un servidor de IA.</p>
             </div>
 
             <!-- Chat Container Box -->
@@ -292,8 +292,8 @@
                             <span class="w-3 h-3 bg-emerald-500 border-2 border-slate-900 rounded-full absolute -bottom-0.5 -right-0.5"></span>
                         </div>
                         <div>
-                            <div class="text-sm font-bold text-white">Rinaldi-Bot v2.4 (Semantic Kernel Agent)</div>
-                            <div class="text-xs font-mono text-cyan-400">RAG Context: Active | Model: Claude / GPT-4o Agent</div>
+                            <div class="text-sm font-bold text-white">Asistente local con IA</div>
+                            <div id="local-model-status" class="text-xs font-mono text-amber-300">Modelo local | descarga inicial ~900 MB (requiere WebGPU)</div>
                         </div>
                     </div>
                     <button id="clear-chat" class="text-xs font-mono text-slate-400 hover:text-white px-2.5 py-1 rounded bg-slate-800 border border-slate-700">
@@ -309,7 +309,7 @@
                             <i class="fa-solid fa-robot text-xs"></i>
                         </div>
                         <div class="glass-panel p-3.5 rounded-2xl rounded-tl-none border border-slate-800 max-w-xl text-slate-200 leading-relaxed">
-                            ¡Hola! Soy el agente virtual de Facundo. Puedo darte detalles sobre su experiencia en **.NET C#**, **Angular**, **Clean Architecture** o cómo implementa **RAG y Agentes Autónomos con Semantic Kernel**. ¿Qué te gustaría consultar?
+                            ¡Hola! Soy un asistente que corre en tu navegador. Preguntame sobre la experiencia, tecnologías, proyectos o formación de Facundo. La primera consulta descarga el modelo (~900 MB).
                         </div>
                     </div>
                 </div>
@@ -792,103 +792,193 @@
             });
         });
 
-        // 5. AI CHATBOT INTERACTIVE DEMO (RAG Simulation)
+        // 5. LOCAL AI PROFILE ASSISTANT
         const chatForm = document.getElementById("chat-form");
         const chatInput = document.getElementById("chat-input");
         const chatMessages = document.getElementById("chat-messages");
         const clearChatBtn = document.getElementById("clear-chat");
         const quickPrompts = document.querySelectorAll(".quick-prompt");
+        const modelStatus = document.getElementById("local-model-status");
+        const chatSubmitButton = chatForm.querySelector('button[type="submit"]');
 
-        const kbResponses = {
-            net: "Facundo acumula más de 10 años desarrollando software, con sólida experiencia corporativa en **Servicios y Sistemas de PostVenta (SSPV)** trabajando para **Santander, La Caja, Federación Patronal y Sancor**. Domina **.NET 8 C#**, ASP.NET Web API, Clean Architecture, CQRS y microservicios.",
-            ai: "Facundo integra IA avanzada utilizando **Microsoft Semantic Kernel en C#**, creando flujos RAG con bases vectoriales como **Qdrant y Pinecone**. También implementa agentes capaces de realizar *Function Calling* y consumir LLMs locales como **Ollama**.",
-            front: "En el frontend, Facundo es especialista en **Angular** (TypeScript, RxJS, NgRx) y posee amplio conocimiento en **React**, construyendo interfaces fluidas e intuitivas con Tailwind CSS y componentes reactivos.",
-            default: "Facundo es un Ingeniero de Software Senior Full Stack (.NET / Angular) especializado en llevar sistemas con Inteligencia Artificial Generativa y Agentes Autónomos a entornos corporativos de alta demanda."
-        };
+        const localModelId = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+        const profileContext = `Sos el asistente del portfolio de Facundo Tomás Rinaldi. Respondé siempre en el idioma de la pregunta, de forma natural, breve y precisa. Para responder sobre Facundo, usá exclusivamente los datos verificados de este perfil; no agregues datos de tu conocimiento general ni inventes información.
+
+Perfil: desarrollador Full Stack Senior con más de 10 años de experiencia en desarrollo de software. Desde enero de 2022 trabaja en Servicios y Sistemas de PostVenta (SSPV), en proyectos de banca y seguros vinculados a Santander, La Caja, Federación Patronal y Sancor.
+Lenguajes: C, C++, C#, .NET 8/.NET Core/.NET Framework, Python, PHP, Visual Basic, ASP Classic, TypeScript y JavaScript.
+Backend: ASP.NET Web API, Python/FastAPI, Node.js, APIs REST, microservicios, LINQ y procesamiento asíncrono.
+Frontend: Angular, React, Vue, RxJS, NgRx, HTML5, CSS3 e interfaces conversacionales con streaming.
+IA: Microsoft Semantic Kernel, LangChain, AutoGen, RAG, agentes, Function Calling, OpenAI, Anthropic Claude, Gemini, Ollama y embeddings.
+Datos: SQL Server, PostgreSQL, MySQL, Redis, Entity Framework Core, Qdrant, Pinecone y pgvector.
+Cloud y prácticas: Google Cloud Platform, Docker, Kubernetes, CI/CD, Git, GitHub Actions, Clean Architecture, Clean Code, SOLID, CQRS, DDD, testing unitario y de integración, Scrum, Kanban y Jira.
+Formación: Experto Universitario en Diseño y Mantenimiento de DB SQL, UTN Buenos Aires (2024); Diplomatura en Desarrollo de Videojuegos, UTN BA (2014–2015). Inglés intermedio a intermedio/avanzado.
+
+Si preguntan edad, fecha de nacimiento u otro dato personal que no aparece arriba, aclaralo. No afirmes años de experiencia para una tecnología específica si el perfil no los informa.`;
+        let localEngine = null;
+        let modelLoadPromise = null;
+        let isModelResponding = false;
+        let conversationHistory = [];
 
         function addMessage(sender, text) {
             const msgDiv = document.createElement("div");
             msgDiv.className = "flex items-start gap-3 animate-fade-in";
 
             if (sender === "user") {
-                msgDiv.innerHTML = `
-                    <div class="glass-panel p-3.5 rounded-2xl rounded-tr-none border border-cyan-500/30 bg-cyan-950/20 text-cyan-100 max-w-xl ml-auto leading-relaxed">
-                        ${text}
-                    </div>
-                    <div class="w-8 h-8 rounded-lg bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 flex items-center justify-center shrink-0 font-bold text-xs">
-                        TÚ
-                    </div>
-                `;
+                const message = document.createElement("div");
+                message.className = "glass-panel p-3.5 rounded-2xl rounded-tr-none border border-cyan-500/30 bg-cyan-950/20 text-cyan-100 max-w-xl ml-auto leading-relaxed whitespace-pre-wrap";
+                message.textContent = text;
+
+                const avatar = document.createElement("div");
+                avatar.className = "w-8 h-8 rounded-lg bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 flex items-center justify-center shrink-0 font-bold text-xs";
+                avatar.textContent = "TÚ";
+                msgDiv.append(message, avatar);
             } else {
-                msgDiv.innerHTML = `
-                    <div class="w-8 h-8 rounded-lg bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 flex items-center justify-center shrink-0">
-                        <i class="fa-solid fa-robot text-xs"></i>
-                    </div>
-                    <div class="glass-panel p-3.5 rounded-2xl rounded-tl-none border border-slate-800 max-w-xl text-slate-200 leading-relaxed">
-                        ${text}
-                    </div>
-                `;
+                const avatar = document.createElement("div");
+                avatar.className = "w-8 h-8 rounded-lg bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 flex items-center justify-center shrink-0";
+                const icon = document.createElement("i");
+                icon.className = "fa-solid fa-robot text-xs";
+                avatar.appendChild(icon);
+
+                const message = document.createElement("div");
+                message.className = "glass-panel p-3.5 rounded-2xl rounded-tl-none border border-slate-800 max-w-xl text-slate-200 leading-relaxed whitespace-pre-wrap";
+                message.textContent = text;
+                msgDiv.append(avatar, message);
             }
 
             chatMessages.appendChild(msgDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+            return sender === "bot" ? msgDiv.lastElementChild : msgDiv.firstElementChild;
         }
 
-        function simulateAIResponse(userText) {
-            const lower = userText.toLowerCase();
-            let botReply = kbResponses.default;
+        function setAssistantBusy(isBusy) {
+            isModelResponding = isBusy;
+            chatSubmitButton.disabled = isBusy;
+            chatInput.disabled = isBusy;
+            quickPrompts.forEach((button) => {
+                button.disabled = isBusy;
+            });
+        }
 
-            if (lower.includes("net") || lower.includes("banca") || lower.includes("experiencia") || lower.includes("c#")) {
-                botReply = kbResponses.net;
-            } else if (lower.includes("semantic") || lower.includes("rag") || lower.includes("ia") || lower.includes("agente")) {
-                botReply = kbResponses.ai;
-            } else if (lower.includes("frontend") || lower.includes("angular") || lower.includes("react") || lower.includes("base")) {
-                botReply = kbResponses.front;
+        async function loadLocalModel() {
+            if (localEngine) return localEngine;
+            if (modelLoadPromise) return modelLoadPromise;
+
+            if (!window.isSecureContext || !navigator.gpu) {
+                throw new Error("Este navegador o contexto no tiene WebGPU disponible. Abrí el portfolio en Chrome o Edge actualizado mediante HTTPS.");
             }
 
-            // Typing indicator simulation
+            modelStatus.textContent = "Cargando motor de IA...";
+            modelStatus.className = "text-xs font-mono text-amber-300";
+            modelLoadPromise = (async () => {
+                const { CreateMLCEngine } = await import("https://esm.run/@mlc-ai/web-llm@0.2.87");
+                localEngine = await CreateMLCEngine(localModelId, {
+                    initProgressCallback: (progress) => {
+                        if (Number.isFinite(progress.progress)) {
+                            modelStatus.textContent = `Descargando modelo: ${Math.round(progress.progress * 100)}%`;
+                        } else if (progress.text) {
+                            modelStatus.textContent = progress.text;
+                        }
+                    }
+                });
+                return localEngine;
+            })();
+
+            try {
+                return await modelLoadPromise;
+            } catch (error) {
+                modelLoadPromise = null;
+                modelStatus.textContent = "No se pudo cargar el modelo";
+                modelStatus.className = "text-xs font-mono text-rose-300";
+                throw error;
+            }
+        }
+
+        function createTypingIndicator(label) {
             const typingDiv = document.createElement("div");
             typingDiv.id = "typing-indicator";
             typingDiv.className = "flex items-center gap-2 text-xs font-mono text-cyan-400 pl-11";
-            typingDiv.innerHTML = `<i class="fa-solid fa-spinner animate-spin"></i> RAG Semantic Kernel buscando en vectores...`;
+            const spinner = document.createElement("i");
+            spinner.className = "fa-solid fa-spinner animate-spin";
+            const status = document.createElement("span");
+            status.textContent = label;
+            typingDiv.append(spinner, status);
             chatMessages.appendChild(typingDiv);
             chatMessages.scrollTop = chatMessages.scrollHeight;
+            return status;
+        }
 
-            setTimeout(() => {
+        async function answerWithLocalModel(userText) {
+            if (isModelResponding) return;
+            addMessage("user", userText);
+            conversationHistory.push({ role: "user", content: userText });
+            setAssistantBusy(true);
+            const typingStatus = createTypingIndicator("Preparando el modelo local...");
+
+            try {
+                const engine = await loadLocalModel();
+                typingStatus.textContent = "Generando respuesta local...";
+                const messages = [
+                    { role: "system", content: profileContext },
+                    ...conversationHistory.slice(-8)
+                ];
+                let answer = "";
+                const assistantMessage = addMessage("bot", "");
+                const stream = await engine.chat.completions.create({
+                    messages,
+                    temperature: 0.3,
+                    max_tokens: 180,
+                    stream: true
+                });
+                for await (const chunk of stream) {
+                    answer += chunk.choices[0]?.delta?.content || "";
+                    assistantMessage.textContent = answer;
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                }
+                answer = answer.trim();
+                if (!answer) {
+                    assistantMessage.remove();
+                    throw new Error("El modelo no devolvió una respuesta. Probá con otra pregunta.");
+                }
+                conversationHistory.push({ role: "assistant", content: answer });
+                modelStatus.textContent = "Modelo local listo | WebGPU";
+                modelStatus.className = "text-xs font-mono text-emerald-400";
+            } catch (error) {
+                conversationHistory.pop();
+                console.error("No se pudo ejecutar el modelo local.", error);
+                modelStatus.textContent = error.message.includes("WebGPU")
+                    ? "WebGPU no disponible"
+                    : "No se pudo cargar el modelo";
+                modelStatus.className = "text-xs font-mono text-rose-300";
+                addMessage("bot", `${error.message} Necesitás internet para la primera descarga del modelo.`);
+            } finally {
                 const indicator = document.getElementById("typing-indicator");
                 if (indicator) indicator.remove();
-                addMessage("bot", botReply);
-            }, 900);
+                setAssistantBusy(false);
+            }
         }
 
         chatForm.addEventListener("submit", (e) => {
             e.preventDefault();
+            if (isModelResponding) return;
             const val = chatInput.value.trim();
             if (!val) return;
-            addMessage("user", val);
             chatInput.value = "";
-            simulateAIResponse(val);
+            answerWithLocalModel(val);
         });
 
         quickPrompts.forEach(btn => {
             btn.addEventListener("click", () => {
+                if (isModelResponding) return;
                 const promptText = btn.textContent.trim();
-                addMessage("user", promptText);
-                simulateAIResponse(promptText);
+                answerWithLocalModel(promptText);
             });
         });
 
         clearChatBtn.addEventListener("click", () => {
-            chatMessages.innerHTML = `
-                <div class="flex items-start gap-3">
-                    <div class="w-8 h-8 rounded-lg bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 flex items-center justify-center shrink-0">
-                        <i class="fa-solid fa-robot text-xs"></i>
-                    </div>
-                    <div class="glass-panel p-3.5 rounded-2xl rounded-tl-none border border-slate-800 max-w-xl text-slate-200 leading-relaxed">
-                        Chat reiniciado. ¿Qué deseas consultar sobre el perfil de Facundo?
-                    </div>
-                </div>
-            `;
+            if (isModelResponding) return;
+            conversationHistory = [];
+            chatMessages.replaceChildren();
+            addMessage("bot", "Chat reiniciado. ¿Qué querés saber sobre el perfil de Facundo?");
         });
 
         // 6. CONTACT FORM SUBMISSION
