@@ -1,13 +1,13 @@
-const MODEL_PREFERENCES = [
+﻿const MODEL_PREFERENCES = [
   [
     "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
-    "Qwen2-1.5B-Instruct-q4f16_1",
-    "Qwen2-1.5B-Instruct-q4f32_1"
+    "Qwen2.5-1.5B-Instruct-q4f16_1",
+    "Qwen2.5-1.5B-Instruct-q4f32_1"
   ],
   [
     "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-    "Qwen2-0.5B-Instruct-q4f16_1",
-    "Qwen2-0.5B-Instruct-q4f32_1"
+    "Qwen2.5-0.5B-Instruct-q4f16_1",
+    "Qwen2.5-0.5B-Instruct-q4f32_1"
   ]
 ];
 const MODEL_LIBRARY_BASE_URL = "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_87/base/";
@@ -38,6 +38,14 @@ function normalizeModelId(modelId) {
   return String(modelId || "").trim();
 }
 
+function postEvent(type, payload = {}, requestId) {
+  postMessage({
+    type,
+    ...(requestId ? { requestId } : {}),
+    ...payload
+  });
+}
+
 async function importWebLLM() {
   return import("https://esm.run/@mlc-ai/web-llm@0.2.87");
 }
@@ -51,12 +59,13 @@ function getAvailableModelIds(webllm) {
   const availableIds = new Set(
     [...modelList, ...QWEN_MODEL_RECORDS].map((model) => normalizeModelId(model.model_id))
   );
+
   const supportedPreferences = MODEL_PREFERENCES.map((aliases) =>
     aliases.find((modelId) => availableIds.has(modelId))
   ).filter(Boolean);
 
   if (supportedPreferences.length === 0) {
-    throw new Error("Esta versión de WebLLM no incluye los modelos Qwen 1.5B ni 0.5B requeridos. Actualizá WebLLM o agregá sus registros precompilados compatibles.");
+    throw new Error("Esta versión de WebLLM no incluye los modelos Qwen 1.5B ni 0.5B requeridos.");
   }
 
   return supportedPreferences;
@@ -71,6 +80,7 @@ async function ensureEngine(webllm, modelId) {
   if (!baseAppConfig || !Array.isArray(baseAppConfig.model_list)) {
     throw new Error("WebLLM no expuso una configuración precompilada válida.");
   }
+
   const appConfig = {
     ...baseAppConfig,
     model_list: [
@@ -94,7 +104,7 @@ async function ensureEngine(webllm, modelId) {
           downloaded: progress?.downloaded || null,
           total: progress?.total || null
         };
-        postMessage(payload);
+        postEvent("progress", payload);
       }
     });
     engine = loadedEngine;
@@ -121,7 +131,7 @@ async function destroyEngine() {
   }
 }
 
-async function generateWithWasm({ question, context, systemPrompt, history = [] }) {
+async function generateWithWasm({ question, context, systemPrompt, history = [] }, requestId) {
   if (!wasmGeneratorPromise) {
     wasmGeneratorPromise = (async () => {
       const { env, pipeline } = await import("https://esm.run/@huggingface/transformers@3.7.2");
@@ -132,11 +142,10 @@ async function generateWithWasm({ question, context, systemPrompt, history = [] 
         device: "wasm",
         dtype: "q4",
         progress_callback: (progress) => {
-          postMessage({
-            type: "progress",
+          postEvent("progress", {
             percent: Number.isFinite(progress?.progress) ? Math.round(progress.progress * 100) : null,
             text: progress?.status ? `Preparando modelo CPU: ${progress.status}` : "Preparando modelo CPU..."
-          });
+          }, requestId);
         }
       });
     })().catch((error) => {
@@ -145,7 +154,7 @@ async function generateWithWasm({ question, context, systemPrompt, history = [] 
     });
   }
 
-  postMessage({ type: "status", text: "Modo CPU (lento) | preparando el modelo..." });
+  postEvent("status", { text: "Modo CPU (lento) | preparando el modelo..." }, requestId);
   const generator = await wasmGeneratorPromise;
   const messages = [
     { role: "system", content: systemPrompt },
@@ -155,10 +164,12 @@ async function generateWithWasm({ question, context, systemPrompt, history = [] 
       content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
     }
   ];
+
   const result = await generator(messages, {
     max_new_tokens: 200,
     do_sample: false
   });
+
   const generatedText = result?.[0]?.generated_text;
   const response = Array.isArray(generatedText)
     ? generatedText[generatedText.length - 1]?.content
@@ -167,22 +178,32 @@ async function generateWithWasm({ question, context, systemPrompt, history = [] 
   if (typeof response !== "string" || !response.trim()) {
     throw new Error("El modelo CPU no generó una respuesta.");
   }
+
   return response.trim();
 }
 
 self.addEventListener("message", async (event) => {
-  const { type, payload } = event.data || {};
+  const { type, payload = {}, requestId } = event.data || {};
+
+  if (type === "destroy-engine") {
+    try {
+      await destroyEngine();
+      postEvent("engine-destroyed", { text: "Motor liberado." }, requestId);
+    } catch (error) {
+      postEvent("error", { text: "No se pudo liberar el motor de forma limpia." }, requestId);
+    }
+    return;
+  }
 
   if (type === "generate-wasm") {
     try {
-      const response = await generateWithWasm(payload || {});
-      postMessage({ type: "done", text: response });
+      const response = await generateWithWasm(payload || {}, requestId);
+      postEvent("done", { text: response }, requestId);
     } catch (error) {
       console.error("Error al ejecutar el modelo local en modo CPU.", error);
-      postMessage({
-        type: "error",
+      postEvent("error", {
         text: "El asistente está usando el modo de compatibilidad por CPU. No se pudo cargar o ejecutar el modelo local; intentá nuevamente."
-      });
+      }, requestId);
     }
     return;
   }
@@ -202,14 +223,14 @@ self.addEventListener("message", async (event) => {
     for (let index = 0; index < modelCandidates.length; index += 1) {
       const candidate = modelCandidates[index];
       try {
-        postMessage({ type: "status", text: `Preparando modelo ${candidate}...` });
+        postEvent("status", { text: `Preparando modelo ${candidate}...` }, requestId);
         modelEngine = await ensureEngine(webllm, candidate);
         break;
       } catch (error) {
         lastError = error;
         const nextCandidate = modelCandidates[index + 1];
         if (nextCandidate) {
-          postMessage({ type: "status", text: `El modelo ${candidate} falló; reintentando con ${nextCandidate}...` });
+          postEvent("status", { text: `El modelo ${candidate} falló; reintentando con ${nextCandidate}...` }, requestId);
         }
       }
     }
@@ -218,56 +239,49 @@ self.addEventListener("message", async (event) => {
       throw lastError || new Error("No se pudo cargar ningún modelo compatible.");
     }
 
-    try {
-      const messages = [
-        { role: "system", content: systemPrompt },
-        ...history.slice(-4),
-        {
-          role: "user",
-          content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
-        }
-      ];
-
-      const stream = await modelEngine.chat.completions.create({
-        messages,
-        temperature: 0.2,
-        top_p: 0.9,
-        max_tokens: 280,
-        seed: 1234,
-        stream: true
-      });
-
-      let response = "";
-      for await (const chunk of stream) {
-        const delta = chunk?.choices?.[0]?.delta?.content || "";
-        if (!delta) {
-          continue;
-        }
-        response += delta;
-        postMessage({ type: "token", token: delta });
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...(Array.isArray(history) ? history.slice(-4) : []),
+      {
+        role: "user",
+        content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
       }
+    ];
 
-      postMessage({ type: "done", text: response.trim() || "No pude obtener una respuesta con la información disponible." });
-    } catch (error) {
-      await destroyEngine();
-      console.error("Falló la inferencia local; se liberó el motor WebLLM para permitir una inicialización limpia.", error);
-      postMessage({
-        type: "model-reset",
-        text: "El modelo se reinició por falta de memoria o por una interrupción de la GPU. Volvé a intentar la pregunta."
-      });
+    const stream = await modelEngine.chat.completions.create({
+      messages,
+      temperature: 0.2,
+      top_p: 0.9,
+      max_tokens: 280,
+      seed: 1234,
+      stream: true
+    });
+
+    let response = "";
+    for await (const chunk of stream) {
+      const delta = chunk?.choices?.[0]?.delta?.content || "";
+      if (!delta) {
+        continue;
+      }
+      response += delta;
+      postEvent("token", { token: delta }, requestId);
     }
+
+    postEvent("done", { text: response.trim() || "No pude obtener una respuesta con la información disponible." }, requestId);
   } catch (error) {
     console.error("Error al ejecutar el modelo local en worker.", error);
+    await destroyEngine().catch(() => undefined);
+
     if (/gpu|adapter|memory/i.test(error?.message || "")) {
-      postMessage({
-        type: "error",
-        text: "Se perdió la conexión con la GPU. Recargá la página o escribime a facundorinaldi91@gmail.com."
-      });
+      postEvent("model-reset", {
+        text: "Se perdió la conexión con la GPU o quedó sin memoria suficiente. El asistente volvió al modo documentado para seguir respondiendo con evidencia."
+      }, requestId);
       return;
     }
+
     const fallbackText = error?.message?.includes("modelos Qwen")
       ? error.message
-      : "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com.";
-    postMessage({ type: "error", text: fallbackText });
+      : "No se pudo inicializar el modelo local. El asistente sigue disponible con respuestas basadas en evidencia documental.";
+    postEvent("error", { text: fallbackText }, requestId);
   }
 });

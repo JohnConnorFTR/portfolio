@@ -691,6 +691,7 @@
 
     <!-- JAVASCRIPT LOGIC -->
     <script src="knowledge-base.js"></script>
+    <script src="./js/assistant/retrieval.js"></script>
     <script>
         // 1. DYNAMIC TYPING EFFECT FOR HERO SECTION
         const titles = [
@@ -853,185 +854,25 @@
                 : "Modo CPU (lento)";
             modelStatus.className = `text-xs font-mono ${webGpuAvailableAtLoad ? "text-emerald-400" : "text-amber-300"}`;
         });
-        const compactKnowledgeFacts = window.KNOWLEDGE_BASE;
-        const retrievalStopWords = new Set("a al algo algun alguna algunas algunos ante aqui asi bajo bien cada como con contra cual cuales cuando cuanto cuantos de del desde donde dos el ella ellas ellos en entre era es esa esas ese eso esos esta estas este esto estos fue ha hacia hasta hay la las le les lo los mas me mi mis mucha muchas mucho muchos muy nada ni no nos o otra otras otro otros para pero poco por porque que quien quienes se sea ser si sin sobre son su sus te tener tiene tienen tu tus un una unas uno unos y ya".split(" "));
-        const queryAliases = {
-            ".net": [".net", "net", "dotnet", "c#"],
-            banca: ["banca", "bancarias", "banking", "banco"],
-            seguros: ["seguro", "seguros", "siniestro", "siniestros"],
-            seguro: ["seguro", "seguros", "siniestro", "siniestros"],
-            siniestro: ["seguro", "seguros", "siniestro", "siniestros"],
-            experiencia: ["experiencia", "trayectoria", "trabajo", "trabaja", "empleo"],
-            lenguajes: ["lenguaje", "lenguajes", "programacion", "c", "c++", "c#", "python", "php", "javascript", "typescript"],
-            ia: ["ia", "inteligencia", "agentes", "rag", "llm"],
-            datos: ["datos", "base", "bases", "sql", "database"],
-            cloud: ["cloud", "nube", "infraestructura", "devops"],
-            formacion: ["formacion", "estudios", "educacion", "universidad", "utn"],
-            idiomas: ["idioma", "idiomas", "ingles", "english"],
-            proyectos: ["proyecto", "proyectos", "copilot", "alumbra", "workflow", "erp"],
-            tiempo: ["anos", "ano", "trayectoria", "experiencia"],
-            software: ["software", "desarrollo"],
-            santander: ["santander"],
-            "la caja": ["la caja"],
-            sancor: ["sancor"],
-            inspecciones: ["inspecciones"],
-            validacion: ["validacion"],
-            chatbots: ["chatbots"],
-            erp: ["erp"],
-            fastapi: ["fastapi"],
-            postgresql: ["postgresql"],
-            reduccion: ["reduccion"],
-            "40": ["40"],
-            sspv: ["sspv"]
+        const retrievalApi = window.AssistantRetrieval || {};
+        const findRelevantContext = retrievalApi.findRelevantContext || function(question) {
+            const fallback = { documents: [], score: 0, confidence: 0, sources: [], queryCategory: [], text: '' };
+            return fallback;
         };
-        const questionTopicRules = [
-            { category: "PERFIL", pattern: /\b(quien|perfil|resumen|sobre facundo|software)\b/ },
-            { category: "EXPERIENCIA", pattern: /\b(experiencia|trayectoria|trabajo|trabaja|puesto|banca|bancarias|banking|seguros|siniestros|santander|la caja|sancor|sspv|inspecciones|reduccion|40|automatizacion|validacion)\b/ },
-            { category: "LENGUAJES", pattern: /\b(lenguaje|lenguajes|programacion|c|c\+\+|c#|python|php|javascript|typescript|visual basic)\b/ },
-            { category: "BACKEND", pattern: /\.net|\b(dotnet|backend|asp\.net|api|microservicios|node\.?js|fastapi|postgresql)\b/ },
-            { category: "FRONTEND", pattern: /\b(frontend|angular|react|vue|rxjs|ngrx|html|css)\b/ },
-            { category: "IA", pattern: /\b(ia|inteligencia artificial|rag|agente|agentes|semantic kernel|langchain|autogen|gemini|ollama|openai|claude)\b/ },
-            { category: "DATOS", pattern: /\b(datos|base de datos|sql server|postgresql|mysql|redis|qdrant|pinecone|pgvector)\b/ },
-            { category: "CLOUD", pattern: /\b(cloud|nube|devops|gcp|docker|kubernetes|ci\/cd)\b/ },
-            { category: "PRACTICAS", pattern: /\b(arquitectura|clean|solid|cqrs|ddd|testing|pruebas|scrum|kanban|jira)\b/ },
-            { category: "PROYECTO_RAG", pattern: /\b(claims|copilot|expedientes|qdrant)\b/ },
-            { category: "PROYECTO_ERP", pattern: /\b(alumbra|erp|facturacion|logistica|stock)\b/ },
-            { category: "PROYECTO_AGENTES", pattern: /\b(workflow|pipelines|agentes|fastapi)\b/ },
-            { category: "EXPERIENCIA", pattern: /\b(chatbots|erp)\b/ },
-            { category: "PROYECTOS", pattern: /\b(proyecto|proyectos)\b/ },
-            { category: "FORMACION", pattern: /\b(estudio|estudios|formacion|educacion|universidad|utn|diplomatura|bachiller)\b/ },
-            { category: "IDIOMAS", pattern: /\b(ingles|idioma|idiomas)\b/ },
-            { category: "DATOS_PERSONALES", pattern: /\b(edad|nacimiento|fecha de nacimiento)\b/ },
-            { category: "HABILIDADES", pattern: /\b(habilidad|habilidades|skills|stack|tecnologias|herramientas)\b/ },
-            { category: "PORTFOLIO", pattern: /\b(portfolio|sitio|web)\b/ },
-            { category: "CERTIFICACIONES", pattern: /\b(certificacion|certificaciones|aprendizaje continuo|especializacion)\b/ },
-            { category: "DISPONIBILIDAD", pattern: /\b(disponibilidad|disponible|oportunidad|puesto|trabajo)\b/ },
-            { category: "UBICACION", pattern: /\b(ubicacion|ciudad|residencia|donde vive)\b/ }
-        ];
+        const buildEvidenceFallback = retrievalApi.buildEvidenceFallback || function(retrieval) {
+            return { text: 'No encontre esa información documentada en el portfolio ni en el CV.', sources: [], documents: [], score: 0, confidence: 0, queryCategory: retrieval?.queryCategory || [] };
+        };
+        const containsPromptInjection = retrievalApi.containsPromptInjection || function() { return false; };
+        const sanitizeAnswer = retrievalApi.sanitizeAnswer || function(answer) { return String(answer || '').trim(); };
 
         function normalizeContextText(text) {
-            return text.toLocaleLowerCase("es").normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+            return String(text || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
         }
 
-        function tokenizeContext(text) {
-            return normalizeContextText(text).match(/c\+\+|c#|\.net|[a-z0-9]+/g) || [];
+        function isEvidenceFallbackSafe(question, retrieval) {
+            const safeQuestion = normalizeContextText(question || '');
+            return !!(retrieval && retrieval.documents && retrieval.documents.length) || /\b(facundo|perfil|experiencia|proyecto|tecnologia|stack|ai|rag|dotnet|angular|seguro|banca)\b/.test(safeQuestion);
         }
-
-        function getContextQueryTokens(question) {
-            const tokens = [...new Set(tokenizeContext(question)
-                .filter((token) => !retrievalStopWords.has(token) && (token.length > 1 || token === "c")))];
-            return tokens.filter((token) => token !== "facundo" && token !== "rinaldi");
-        }
-
-        function findRelevantContext(question) {
-            const normalizedQuestion = normalizeContextText(question);
-            const queryTokens = getContextQueryTokens(question);
-            const requestedCategories = questionTopicRules
-                .filter((rule) => rule.pattern.test(normalizedQuestion))
-                .map((rule) => rule.category);
-            const isProfileQuestion = /\b(quien|perfil|resumen)\b/.test(normalizedQuestion);
-            const effectiveCategories = requestedCategories.length
-                ? requestedCategories
-                : (isProfileQuestion ? ["PERFIL"] : []);
-            const rankedFacts = compactKnowledgeFacts.map((fact) => {
-                const factTokens = tokenizeContext(fact.text);
-                const matchingTerms = queryTokens.filter((term) => {
-                    const aliases = queryAliases[term] || [term];
-                    return aliases.some((alias) => factTokens.includes(alias));
-                });
-                const categoryMatch = effectiveCategories.some((category) =>
-                    fact.category === category || fact.category.startsWith(`${category}_`)
-                );
-                return {
-                    ...fact,
-                    score: matchingTerms.length * 2 + (categoryMatch ? 3 : 0),
-                    matchedTerms: matchingTerms.length,
-                    categoryMatch
-                };
-            }).filter((fact) => fact.score > 0)
-                .sort((a, b) => b.score - a.score || a.text.length - b.text.length);
-
-            if (rankedFacts.length === 0) {
-                return { text: "", documents: [], score: 0 };
-            }
-
-            const bestScore = rankedFacts[0].score;
-            const selectedFacts = rankedFacts
-                .filter((fact) => fact.score >= Math.max(3, bestScore - 2))
-                .slice(0, 4);
-
-            return {
-                text: selectedFacts
-                    .map((fact) => `[${fact.category} | ${fact.source}] ${fact.text}`)
-                    .join("\n"),
-                documents: selectedFacts,
-                score: bestScore
-            };
-        }
-
-        function buildEvidenceFallback(retrieval) {
-            if (retrieval.documents.length === 0) {
-                return {
-                    text: "No encuentro ese dato en los CV ni en el contenido del portfolio.",
-                    sources: []
-                };
-            }
-
-            return {
-                text: retrieval.documents.map((fact) => `• ${fact.text}`).join("\n"),
-                sources: [...new Set(retrieval.documents.map((fact) => fact.source))]
-            };
-        }
-
-        function resetProgressUi() {
-            modelProgress.classList.add("hidden");
-            progressBar.style.width = "0%";
-            progressPercent.textContent = "0%";
-            progressLabel.textContent = "Preparando modelo local";
-            modelProgress.setAttribute("aria-valuenow", "0");
-        }
-
-        function setModelProgress(percent, text) {
-            if (typeof percent === "number" && Number.isFinite(percent)) {
-                const normalizedPercent = Math.min(100, Math.max(0, percent));
-                progressBar.style.width = `${normalizedPercent}%`;
-                progressPercent.textContent = `${Math.round(normalizedPercent)}%`;
-                modelProgress.setAttribute("aria-valuenow", String(Math.round(normalizedPercent)));
-            }
-            if (text) {
-                progressLabel.textContent = text;
-            }
-            modelProgress.classList.remove("hidden");
-        }
-
-        function containsPromptInjection(message) {
-            const normalized = normalizeContextText(message);
-            return [
-                /ignora.*instrucciones/i,
-                /revel(a|ar).*prompt/i,
-                /actua como/i,
-                /system prompt|developer mode|jailbreak/i,
-                /olvida.*reglas/i,
-                /prompt injection/i
-            ].some((pattern) => pattern.test(normalized));
-        }
-
-        function sanitizeAnswer(answer, retrievalText) {
-            const normalizedAnswer = normalizeContextText(answer);
-            const evidence = normalizeContextText(retrievalText || "");
-            const suspicious = /\b(edad|nacimiento|fecha de nacimiento|telefono|direccion|dni|passport|email|linkedin)\b/.test(normalizedAnswer)
-                && !/\b(edad|nacimiento|fecha de nacimiento|contacto|email|linkedin)\b/.test(evidence);
-            if (suspicious || !answer.trim()) {
-                return "No tengo esa información confirmada en el portfolio o en los CV. Si querés, podés dejar tu consulta por contacto.";
-            }
-            const numbers = Array.from(new Set((answer.match(/\d+(?:[.,]\d+)?%?/g) || [])));
-            const allowedNumbers = new Set((retrievalText.match(/\d+(?:[.,]\d+)?%?/g) || []));
-            if (numbers.some((value) => !allowedNumbers.has(value))) {
-                return "No puedo confirmar esa cifra en la información oficial. Te cuento lo que sí está documentado.";
-            }
-            return answer.trim();
-        }
-
         function createAssistantBubble() {
             const container = document.createElement("div");
             container.className = "flex items-start gap-3";
@@ -1108,7 +949,11 @@
                         return;
                     }
                     if (message.type === "model-reset") {
-                        const resetText = message.text || "El modelo se reinició por falta de memoria. Volvé a intentar la pregunta.";
+                        const fallbackRetrieval = findRelevantContext(activeAssistantQuestion || "");
+                        const fallbackMessage = buildEvidenceFallback(fallbackRetrieval);
+                        const resetText = fallbackMessage.documents.length
+                            ? `${fallbackMessage.text}\n\nFuentes: ${fallbackMessage.sources.join(" · ")}`
+                            : (message.text || "El modelo se reinició por falta de memoria. Volvé a intentar la pregunta.");
                         if (activeAssistantMessage) {
                             activeAssistantMessage.textContent = resetText;
                         } else {
@@ -1117,16 +962,20 @@
                         activeAssistantMessage = null;
                         activeAssistantQuestion = "";
                         activeAssistantEvidence = "";
-                        modelStatus.textContent = "Modelo reiniciado | podés volver a intentar";
+                        modelStatus.textContent = "Modo documentado activo";
                         modelStatus.className = "text-xs font-mono text-amber-300";
                         resetProgressUi();
                         setAssistantBusy(false);
                         return;
                     }
                     if (message.type === "error") {
-                        const errorText = message.text || (webGpuAvailableAtLoad
-                            ? "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com."
-                            : "El asistente está usando el modo de compatibilidad por CPU. No se pudo cargar el modelo local; intentá nuevamente.");
+                        const fallbackRetrieval = findRelevantContext(activeAssistantQuestion || "");
+                        const fallbackMessage = buildEvidenceFallback(fallbackRetrieval);
+                        const errorText = fallbackMessage.documents.length
+                            ? `${fallbackMessage.text}\n\nFuentes: ${fallbackMessage.sources.join(" · ")}`
+                            : (message.text || (webGpuAvailableAtLoad
+                                ? "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com."
+                                : "El asistente está usando el modo de compatibilidad por CPU. No se pudo cargar el modelo local; intentá nuevamente."));
                         if (activeAssistantMessage) {
                             activeAssistantMessage.textContent = errorText;
                         } else {
@@ -1135,10 +984,8 @@
                         activeAssistantMessage = null;
                         activeAssistantQuestion = "";
                         activeAssistantEvidence = "";
-                        modelStatus.textContent = webGpuAvailableAtLoad
-                            ? "No se pudo iniciar el modelo local"
-                            : "Modo CPU (lento) | no se pudo iniciar el modelo";
-                        modelStatus.className = "text-xs font-mono text-rose-300";
+                        modelStatus.textContent = "Modo documentado activo";
+                        modelStatus.className = "text-xs font-mono text-amber-300";
                         resetProgressUi();
                         setAssistantBusy(false);
                     }
@@ -1226,7 +1073,7 @@
             try {
                 webGpuAvailableAtLoad = await webGpuCheckPromise;
                 const retrieval = findRelevantContext(safeText);
-                if (!retrieval.text || retrieval.score < 0.7) {
+                if (!retrieval.text || retrieval.score < 2) {
                     const fallback = buildEvidenceFallback(retrieval);
                     const finalAnswer = fallback.sources.length
                         ? `${fallback.text}\n\nFuentes: ${fallback.sources.join(" · ")}`
@@ -1262,6 +1109,7 @@
 
                 worker.postMessage({
                     type: webGpuAvailableAtLoad ? "generate" : "generate-wasm",
+                    requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
                     payload: {
                         question: safeText,
                         context: retrieval.text,
@@ -1272,17 +1120,21 @@
                 return;
             } catch (error) {
                 console.error("No se pudo ejecutar el modelo local.", error);
-                const fallback = "Ocurrió un error interno en el asistente. Por favor, intentá de nuevo.";
+                const retrieval = findRelevantContext(safeText);
+                const fallbackData = buildEvidenceFallback(retrieval);
+                const fallbackText = fallbackData.documents.length
+                    ? `${fallbackData.text}\n\nFuentes: ${fallbackData.sources.join(" · ")}`
+                    : "Ocurrió un error interno en el asistente. Por favor, intentá de nuevo.";
                 if (activeAssistantMessage) {
-                    activeAssistantMessage.textContent = fallback;
+                    activeAssistantMessage.textContent = fallbackText;
                 } else {
-                    addMessage("bot", fallback);
+                    addMessage("bot", fallbackText);
                 }
                 activeAssistantMessage = null;
                 activeAssistantQuestion = "";
                 activeAssistantEvidence = "";
-                modelStatus.textContent = "Error interno del asistente";
-                modelStatus.className = "text-xs font-mono text-rose-300";
+                modelStatus.textContent = "Modo documentado activo";
+                modelStatus.className = "text-xs font-mono text-amber-300";
                 resetProgressUi();
                 setAssistantBusy(false);
             } finally {
