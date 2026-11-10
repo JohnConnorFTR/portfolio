@@ -854,6 +854,39 @@
                 : "Modo CPU (lento)";
             modelStatus.className = `text-xs font-mono ${webGpuAvailableAtLoad ? "text-emerald-400" : "text-amber-300"}`;
         });
+        function setModelProgress(percent, label) {
+            const safePercent = Number.isFinite(percent) ? Math.max(0, Math.min(100, Number(percent))) : 0;
+            if (modelProgress) {
+                modelProgress.classList.remove("hidden");
+                modelProgress.setAttribute("aria-valuenow", String(safePercent));
+            }
+            if (progressBar) {
+                progressBar.style.width = `${safePercent}%`;
+            }
+            if (progressLabel) {
+                progressLabel.textContent = label || "Preparando modelo local";
+            }
+            if (progressPercent) {
+                progressPercent.textContent = Number.isFinite(percent) ? `${safePercent}%` : "0%";
+            }
+        }
+
+        function resetProgressUi() {
+            if (modelProgress) {
+                modelProgress.classList.add("hidden");
+                modelProgress.setAttribute("aria-valuenow", "0");
+            }
+            if (progressBar) {
+                progressBar.style.width = "0%";
+            }
+            if (progressLabel) {
+                progressLabel.textContent = "Preparando modelo local";
+            }
+            if (progressPercent) {
+                progressPercent.textContent = "0%";
+            }
+        }
+
         const retrievalApi = window.AssistantRetrieval || {};
         const findRelevantContext = retrievalApi.findRelevantContext || function(question) {
             const fallback = { documents: [], score: 0, confidence: 0, sources: [], queryCategory: [], text: '' };
