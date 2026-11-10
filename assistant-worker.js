@@ -1,10 +1,32 @@
-const PREFERRED_MODELS = [
-  "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
-  "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-  "Qwen2-1.5B-Instruct-q4f16_1",
-  "Qwen2-0.5B-Instruct-q4f16_1",
-  "Qwen2-1.5B-Instruct-q4f32_1",
-  "Qwen2-0.5B-Instruct-q4f32_1"
+const MODEL_PREFERENCES = [
+  [
+    "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+    "Qwen2-1.5B-Instruct-q4f16_1",
+    "Qwen2-1.5B-Instruct-q4f32_1"
+  ],
+  [
+    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+    "Qwen2-0.5B-Instruct-q4f16_1",
+    "Qwen2-0.5B-Instruct-q4f32_1"
+  ]
+];
+const MODEL_LIBRARY_BASE_URL = "https://raw.githubusercontent.com/mlc-ai/binary-mlc-llm-libs/main/web-llm-models/v0_2_87/base/";
+const QWEN_MODEL_RECORDS = [
+  {
+    model: "https://huggingface.co/mlc-ai/Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+    model_id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+    model_lib: `${MODEL_LIBRARY_BASE_URL}Qwen2-1.5B-Instruct-q4f16_1_cs1k-webgpu.wasm`,
+    low_resource_required: true,
+    vram_required_MB: 1629.75,
+    overrides: { context_window_size: 4096 }
+  },
+  {
+    model: "https://huggingface.co/mlc-ai/Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+    model_id: "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
+    model_lib: `${MODEL_LIBRARY_BASE_URL}Qwen2-0.5B-Instruct-q4f16_1_cs1k-webgpu.wasm`,
+    low_resource_required: true,
+    overrides: { context_window_size: 4096 }
+  }
 ];
 
 let engine = null;
@@ -18,58 +40,48 @@ async function importWebLLM() {
   return import("https://esm.run/@mlc-ai/web-llm@0.2.87");
 }
 
-function resolveModelIds() {
-  const preferred = [...PREFERRED_MODELS];
-  const canonical = {
-    "Qwen2.5-1.5B-Instruct-q4f16_1-MLC": [
-      "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
-      "Qwen2-1.5B-Instruct-q4f16_1",
-      "Qwen2-1.5B-Instruct-q4f32_1"
-    ],
-    "Qwen2.5-0.5B-Instruct-q4f16_1-MLC": [
-      "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-      "Qwen2-0.5B-Instruct-q4f16_1",
-      "Qwen2-0.5B-Instruct-q4f32_1"
-    ]
-  };
-
-  return { preferred, canonical };
-}
-
-async function pickModelId() {
-  const { preferred, canonical } = resolveModelIds();
-  try {
-    const webllm = await importWebLLM();
-    const modelList = webllm.prebuiltAppConfig?.model_list ?? [];
-    const knownNames = modelList.map((model) => normalizeModelId(model.model_id || model.model || model.name));
-    for (const candidate of preferred) {
-      if (knownNames.includes(candidate)) return candidate;
-    }
-    for (const candidate of preferred) {
-      const aliases = canonical[candidate] || [candidate];
-      if (aliases.some((alias) => knownNames.some((name) => name === alias || name.includes(alias.replace(/-MLC$/, ""))))) {
-        return candidate;
-      }
-    }
-  } catch (error) {
-    console.warn("No se pudo consultar la lista de modelos de WebLLM; se usa la estrategia de fallbacks por nombre.", error);
+function getAvailableModelIds(webllm) {
+  const modelList = webllm.prebuiltAppConfig?.model_list;
+  if (!Array.isArray(modelList)) {
+    throw new Error("La configuración precompilada de WebLLM no contiene una lista de modelos válida.");
   }
 
-  return preferred[0];
+  const availableIds = new Set(
+    [...modelList, ...QWEN_MODEL_RECORDS].map((model) => normalizeModelId(model.model_id))
+  );
+  const supportedPreferences = MODEL_PREFERENCES.map((aliases) =>
+    aliases.find((modelId) => availableIds.has(modelId))
+  ).filter(Boolean);
+
+  if (supportedPreferences.length === 0) {
+    throw new Error("Esta versión de WebLLM no incluye los modelos Qwen 1.5B ni 0.5B requeridos. Actualizá WebLLM o agregá sus registros precompilados compatibles.");
+  }
+
+  return supportedPreferences;
 }
 
-async function ensureEngine(modelId) {
+async function ensureEngine(webllm, modelId) {
   if (engine && activeModelId === modelId) {
     return engine;
   }
 
-  const webllm = await importWebLLM();
+  const baseAppConfig = webllm.prebuiltAppConfig;
+  if (!baseAppConfig || !Array.isArray(baseAppConfig.model_list)) {
+    throw new Error("WebLLM no expuso una configuración precompilada válida.");
+  }
   const appConfig = {
+    ...baseAppConfig,
+    model_list: [
+      ...baseAppConfig.model_list.filter(
+        (model) => !QWEN_MODEL_RECORDS.some((qwenModel) => qwenModel.model_id === model.model_id)
+      ),
+      ...QWEN_MODEL_RECORDS
+    ],
     cacheBackend: "indexeddb"
   };
 
   const modelToLoad = normalizeModelId(modelId);
-  engine = await webllm.CreateMLCEngine(modelToLoad, {
+  const loadedEngine = await webllm.CreateMLCEngine(modelToLoad, {
     appConfig,
     initProgressCallback: (progress) => {
       const payload = {
@@ -82,6 +94,7 @@ async function ensureEngine(modelId) {
       postMessage(payload);
     }
   });
+  engine = loadedEngine;
   activeModelId = modelToLoad;
   return engine;
 }
@@ -95,12 +108,8 @@ self.addEventListener("message", async (event) => {
 
   try {
     const { question, context, systemPrompt, history = [] } = payload;
-    let chosenModel = await pickModelId();
-    const modelCandidates = [
-      chosenModel,
-      "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",
-      "Qwen2-0.5B-Instruct-q4f16_1"
-    ].filter((value, index, array) => value && array.indexOf(value) === index);
+    const webllm = await importWebLLM();
+    const modelCandidates = getAvailableModelIds(webllm);
 
     let modelEngine = null;
     let lastError = null;
@@ -109,7 +118,7 @@ self.addEventListener("message", async (event) => {
       const candidate = modelCandidates[index];
       try {
         postMessage({ type: "status", text: `Preparando modelo ${candidate}...` });
-        modelEngine = await ensureEngine(candidate);
+        modelEngine = await ensureEngine(webllm, candidate);
         break;
       } catch (error) {
         lastError = error;
@@ -155,7 +164,9 @@ self.addEventListener("message", async (event) => {
     postMessage({ type: "done", text: response.trim() || "No pude obtener una respuesta con la información disponible." });
   } catch (error) {
     console.error("Error al ejecutar el modelo local en worker.", error);
-    const fallbackText = "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com.";
+    const fallbackText = error?.message?.includes("modelos Qwen")
+      ? error.message
+      : "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com.";
     postMessage({ type: "error", text: fallbackText });
   }
 });
