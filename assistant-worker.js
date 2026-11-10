@@ -94,7 +94,7 @@ self.addEventListener("message", async (event) => {
   }
 
   try {
-    const { question, context, systemPrompt } = payload;
+    const { question, context, systemPrompt, history = [] } = payload;
     let chosenModel = await pickModelId();
     const modelCandidates = [
       chosenModel,
@@ -126,9 +126,10 @@ self.addEventListener("message", async (event) => {
 
     const messages = [
       { role: "system", content: systemPrompt },
+      ...history,
       {
         role: "user",
-        content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en español, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
+        content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
       }
     ];
 
@@ -154,9 +155,7 @@ self.addEventListener("message", async (event) => {
     postMessage({ type: "done", text: response.trim() || "No pude obtener una respuesta con la información disponible." });
   } catch (error) {
     console.error("Error al ejecutar el modelo local en worker.", error);
-    const fallbackText = error?.message?.includes("WebGPU")
-      ? "Tu navegador no soporta WebGPU para ejecutar el asistente local. Podés escribir directamente a facundorinaldi91@gmail.com o usar el formulario de contacto."
-      : "El modelo local falló al inicializarse. Reintentaremos con un modelo más liviano y, si continúa, podés escribir directamente por contacto.";
+    const fallbackText = "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com.";
     postMessage({ type: "error", text: fallbackText });
   }
 });
