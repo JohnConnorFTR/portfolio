@@ -193,6 +193,13 @@ self.addEventListener("message", async (event) => {
     }
   } catch (error) {
     console.error("Error al ejecutar el modelo local en worker.", error);
+    if (/gpu|adapter|memory/i.test(error?.message || "")) {
+      postMessage({
+        type: "error",
+        text: "Se perdió la conexión con la GPU. Recargá la página o escribime a facundorinaldi91@gmail.com."
+      });
+      return;
+    }
     const fallbackText = error?.message?.includes("modelos Qwen")
       ? error.message
       : "No se pudo inicializar el modelo local. Intentá nuevamente o escribí directamente a facundorinaldi91@gmail.com.";
