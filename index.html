@@ -898,6 +898,9 @@
                         addMessage("bot", "Ocurrió un error interno en el asistente. Por favor, intentá de nuevo.");
                     }
                     activeAssistantMessage = null;
+                    activeAssistantQuestion = "";
+                    activeAssistantEvidence = "";
+                    currentRequestId = null;
                     assistantWorker = null;
                     modelStatus.textContent = "Error interno del asistente";
                     modelStatus.className = "text-xs font-mono text-rose-300";
@@ -906,6 +909,9 @@
                 });
                 assistantWorker.addEventListener("message", (event) => {
                     const message = event.data || {};
+                    if (message.requestId && currentRequestId && message.requestId !== currentRequestId) {
+                        return;
+                    }
                     if (message.type === "progress") {
                         const percent = message.percent;
                         const text = message.text || "Preparando el asistente en tu navegador...";
@@ -940,12 +946,13 @@
                         activeAssistantMessage = null;
                         activeAssistantQuestion = "";
                         activeAssistantEvidence = "";
+                        currentRequestId = null;
                         modelStatus.textContent = webGpuAvailableAtLoad
                             ? "Modelo local listo | WebGPU"
                             : "Modo CPU (lento) | modelo local listo";
                         modelStatus.className = `text-xs font-mono ${webGpuAvailableAtLoad ? "text-emerald-400" : "text-amber-300"}`;
                         resetProgressUi();
-                        setAssistantBusy(false);
+                        setAssistantState(ASSISTANT_STATES.idle);
                         return;
                     }
                     if (message.type === "model-reset") {
@@ -962,10 +969,11 @@
                         activeAssistantMessage = null;
                         activeAssistantQuestion = "";
                         activeAssistantEvidence = "";
+                        currentRequestId = null;
                         modelStatus.textContent = "Modo documentado activo";
                         modelStatus.className = "text-xs font-mono text-amber-300";
                         resetProgressUi();
-                        setAssistantBusy(false);
+                        setAssistantState(ASSISTANT_STATES.idle);
                         return;
                     }
                     if (message.type === "error") {
@@ -984,10 +992,11 @@
                         activeAssistantMessage = null;
                         activeAssistantQuestion = "";
                         activeAssistantEvidence = "";
+                        currentRequestId = null;
                         modelStatus.textContent = "Modo documentado activo";
                         modelStatus.className = "text-xs font-mono text-amber-300";
                         resetProgressUi();
-                        setAssistantBusy(false);
+                        setAssistantState(ASSISTANT_STATES.idle);
                     }
                 });
             }
@@ -1000,6 +1009,28 @@
         let activeAssistantEvidence = "";
         let isModelResponding = false;
         let conversationHistory = [];
+        let assistantState = "idle";
+        let currentRequestId = null;
+
+        const ASSISTANT_STATES = {
+            idle: "idle",
+            retrieving: "retrieving",
+            initializing: "initializing",
+            generating: "generating",
+            error: "error"
+        };
+
+        function setAssistantState(nextState) {
+            assistantState = nextState;
+            const isBusy = [ASSISTANT_STATES.retrieving, ASSISTANT_STATES.initializing, ASSISTANT_STATES.generating].includes(nextState);
+            isModelResponding = isBusy;
+            chatSubmitButton.disabled = isBusy;
+            chatInput.disabled = false;
+            chatInput.setAttribute("aria-disabled", "false");
+            quickPrompts.forEach((button) => {
+                button.disabled = isBusy;
+            });
+        }
 
         function addMessage(sender, text) {
             const msgDiv = document.createElement("div");
@@ -1033,12 +1064,11 @@
         }
 
         function setAssistantBusy(isBusy) {
-            isModelResponding = isBusy;
-            chatSubmitButton.disabled = isBusy;
-            chatInput.disabled = isBusy;
-            quickPrompts.forEach((button) => {
-                button.disabled = isBusy;
-            });
+            if (isBusy) {
+                setAssistantState(ASSISTANT_STATES.generating);
+                return;
+            }
+            setAssistantState(ASSISTANT_STATES.idle);
         }
 
         function createTypingIndicator(label) {
@@ -1055,10 +1085,12 @@
             return status;
         }
 
-        async function answerWithLocalModel(userText) {
-            if (isModelResponding) return;
-            const trimmedText = userText.trim();
+        function submitAssistantQuestion(userText) {
+            const trimmedText = String(userText || "").trim();
             if (!trimmedText) return;
+            if (assistantState === ASSISTANT_STATES.generating || assistantState === ASSISTANT_STATES.initializing || assistantState === ASSISTANT_STATES.retrieving) {
+                return;
+            }
             if (containsPromptInjection(trimmedText)) {
                 addMessage("user", trimmedText);
                 addMessage("bot", "No puedo seguir ese tipo de solicitud. Preguntame algo sobre Facundo, su experiencia, stack, proyectos o disponibilidad.");
@@ -1066,106 +1098,114 @@
             }
 
             const safeText = trimmedText.replace(/\s+/g, " ");
-            setAssistantBusy(true);
+            setAssistantState(ASSISTANT_STATES.retrieving);
             addMessage("user", safeText);
             const typingStatus = createTypingIndicator("Buscando evidencia relevante...");
 
-            try {
-                webGpuAvailableAtLoad = await webGpuCheckPromise;
-                const retrieval = findRelevantContext(safeText);
-                if (!retrieval.text || retrieval.score < 2) {
-                    const fallback = buildEvidenceFallback(retrieval);
-                    const finalAnswer = fallback.sources.length
-                        ? `${fallback.text}\n\nFuentes: ${fallback.sources.join(" · ")}`
-                        : fallback.text;
-                    conversationHistory.push(
-                        { role: "user", content: safeText },
-                        { role: "assistant", content: fallback.text }
-                    );
-                    conversationHistory = conversationHistory.slice(-4);
-                    addMessage("bot", finalAnswer);
-                    setAssistantBusy(false);
-                    return;
-                }
-
-                if (!window.isSecureContext || !window.Worker) {
-                    throw new Error("El asistente local no pudo iniciarse en este contexto.");
-                }
-
-                const worker = getAssistantWorker();
-                activeAssistantMessage = createAssistantBubble();
-                activeAssistantQuestion = safeText;
-                activeAssistantEvidence = retrieval.text;
-                modelStatus.textContent = webGpuAvailableAtLoad
-                    ? "Preparando el asistente en tu navegador..."
-                    : "Modo CPU (lento) | preparando el asistente...";
-                modelStatus.className = "text-xs font-mono text-amber-300";
-                setModelProgress(0, webGpuAvailableAtLoad
-                    ? "Preparando el asistente en tu navegador..."
-                    : "Descargando el modelo para modo CPU...");
-                typingStatus.textContent = webGpuAvailableAtLoad
-                    ? "Generando respuesta local..."
-                    : "Generando respuesta en modo CPU (puede tardar)...";
-
-                worker.postMessage({
-                    type: webGpuAvailableAtLoad ? "generate" : "generate-wasm",
-                    requestId: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-                    payload: {
-                        question: safeText,
-                        context: retrieval.text,
-                        systemPrompt,
-                        history: conversationHistory.slice(-4)
+            (async () => {
+                try {
+                    webGpuAvailableAtLoad = await webGpuCheckPromise;
+                    const retrieval = findRelevantContext(safeText);
+                    if (!retrieval.text || retrieval.score < 2) {
+                        const fallback = buildEvidenceFallback(retrieval);
+                        const finalAnswer = fallback.sources.length
+                            ? `${fallback.text}\n\nFuentes: ${fallback.sources.join(" · ")}`
+                            : fallback.text;
+                        conversationHistory.push(
+                            { role: "user", content: safeText },
+                            { role: "assistant", content: fallback.text }
+                        );
+                        conversationHistory = conversationHistory.slice(-4);
+                        addMessage("bot", finalAnswer);
+                        setAssistantState(ASSISTANT_STATES.idle);
+                        return;
                     }
-                });
-                return;
-            } catch (error) {
-                console.error("No se pudo ejecutar el modelo local.", error);
-                const retrieval = findRelevantContext(safeText);
-                const fallbackData = buildEvidenceFallback(retrieval);
-                const fallbackText = fallbackData.documents.length
-                    ? `${fallbackData.text}\n\nFuentes: ${fallbackData.sources.join(" · ")}`
-                    : "Ocurrió un error interno en el asistente. Por favor, intentá de nuevo.";
-                if (activeAssistantMessage) {
-                    activeAssistantMessage.textContent = fallbackText;
-                } else {
-                    addMessage("bot", fallbackText);
+
+                    if (!window.isSecureContext || !window.Worker) {
+                        throw new Error("El asistente local no pudo iniciarse en este contexto.");
+                    }
+
+                    const worker = getAssistantWorker();
+                    const requestId = `req-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+                    currentRequestId = requestId;
+                    activeAssistantMessage = createAssistantBubble();
+                    activeAssistantQuestion = safeText;
+                    activeAssistantEvidence = retrieval.text;
+                    setAssistantState(ASSISTANT_STATES.initializing);
+                    modelStatus.textContent = webGpuAvailableAtLoad
+                        ? "Preparando el asistente en tu navegador..."
+                        : "Modo CPU (lento) | preparando el asistente...";
+                    modelStatus.className = "text-xs font-mono text-amber-300";
+                    setModelProgress(0, webGpuAvailableAtLoad
+                        ? "Preparando el asistente en tu navegador..."
+                        : "Descargando el modelo para modo CPU...");
+                    typingStatus.textContent = webGpuAvailableAtLoad
+                        ? "Generando respuesta local..."
+                        : "Generando respuesta en modo CPU (puede tardar)...";
+                    setAssistantState(ASSISTANT_STATES.generating);
+
+                    worker.postMessage({
+                        type: webGpuAvailableAtLoad ? "generate" : "generate-wasm",
+                        requestId,
+                        payload: {
+                            question: safeText,
+                            context: retrieval.text,
+                            systemPrompt,
+                            history: conversationHistory.slice(-4)
+                        }
+                    });
+                } catch (error) {
+                    console.error("No se pudo ejecutar el modelo local.", error);
+                    const fallback = buildEvidenceFallback(findRelevantContext(safeText));
+                    const fallbackText = fallback.documents.length
+                        ? `${fallback.text}\n\nFuentes: ${fallback.sources.join(" · ")}`
+                        : "Ocurrió un error interno en el asistente. Por favor, intentá de nuevo.";
+                    if (activeAssistantMessage) {
+                        activeAssistantMessage.textContent = fallbackText;
+                    } else {
+                        addMessage("bot", fallbackText);
+                    }
+                    activeAssistantMessage = null;
+                    activeAssistantQuestion = "";
+                    activeAssistantEvidence = "";
+                    currentRequestId = null;
+                    modelStatus.textContent = "Modo documentado activo";
+                    modelStatus.className = "text-xs font-mono text-amber-300";
+                    resetProgressUi();
+                    setAssistantState(ASSISTANT_STATES.error);
+                    setTimeout(() => setAssistantState(ASSISTANT_STATES.idle), 120);
+                } finally {
+                    const indicator = document.getElementById("typing-indicator");
+                    if (indicator) indicator.remove();
                 }
-                activeAssistantMessage = null;
-                activeAssistantQuestion = "";
-                activeAssistantEvidence = "";
-                modelStatus.textContent = "Modo documentado activo";
-                modelStatus.className = "text-xs font-mono text-amber-300";
-                resetProgressUi();
-                setAssistantBusy(false);
-            } finally {
-                const indicator = document.getElementById("typing-indicator");
-                if (indicator) indicator.remove();
-            }
+            })();
         }
 
         chatForm.addEventListener("submit", (e) => {
             e.preventDefault();
-            if (isModelResponding) return;
+            if (assistantState === ASSISTANT_STATES.generating || assistantState === ASSISTANT_STATES.initializing || assistantState === ASSISTANT_STATES.retrieving) return;
             const val = chatInput.value.trim();
             if (!val) return;
             chatInput.value = "";
-            answerWithLocalModel(val);
+            submitAssistantQuestion(val);
         });
 
         quickPrompts.forEach(btn => {
             btn.addEventListener("click", () => {
-                if (isModelResponding) return;
+                if (assistantState === ASSISTANT_STATES.generating || assistantState === ASSISTANT_STATES.initializing || assistantState === ASSISTANT_STATES.retrieving) return;
                 const promptText = btn.textContent.trim();
-                answerWithLocalModel(promptText);
+                submitAssistantQuestion(promptText);
             });
         });
 
         clearChatBtn.addEventListener("click", () => {
-            if (isModelResponding) return;
+            if (assistantState === ASSISTANT_STATES.generating || assistantState === ASSISTANT_STATES.initializing || assistantState === ASSISTANT_STATES.retrieving) return;
             conversationHistory = [];
+            currentRequestId = null;
             chatMessages.replaceChildren();
             addMessage("bot", "Chat reiniciado. ¿Qué querés saber sobre el perfil de Facundo?");
             resetProgressUi();
+            setAssistantState(ASSISTANT_STATES.idle);
         });
 
         // 6. CONTACT FORM SUBMISSION
