@@ -81,22 +81,42 @@ async function ensureEngine(webllm, modelId) {
   };
 
   const modelToLoad = normalizeModelId(modelId);
-  const loadedEngine = await webllm.CreateMLCEngine(modelToLoad, {
-    appConfig,
-    initProgressCallback: (progress) => {
-      const payload = {
-        type: "progress",
-        percent: Number.isFinite(progress?.progress) ? Math.round(progress.progress * 100) : null,
-        text: progress?.text || "Preparando el asistente en tu navegador...",
-        downloaded: progress?.downloaded || null,
-        total: progress?.total || null
-      };
-      postMessage(payload);
+  try {
+    const loadedEngine = await webllm.CreateMLCEngine(modelToLoad, {
+      appConfig,
+      initProgressCallback: (progress) => {
+        const payload = {
+          type: "progress",
+          percent: Number.isFinite(progress?.progress) ? Math.round(progress.progress * 100) : null,
+          text: progress?.text || "Preparando el asistente en tu navegador...",
+          downloaded: progress?.downloaded || null,
+          total: progress?.total || null
+        };
+        postMessage(payload);
+      }
+    });
+    engine = loadedEngine;
+    activeModelId = modelToLoad;
+    return engine;
+  } catch (error) {
+    engine = null;
+    activeModelId = null;
+    throw error;
+  }
+}
+
+async function destroyEngine() {
+  const engineToDestroy = engine;
+  engine = null;
+  activeModelId = null;
+
+  if (typeof engineToDestroy?.unload === "function") {
+    try {
+      await engineToDestroy.unload();
+    } catch (error) {
+      console.warn("No se pudo liberar limpiamente el motor WebLLM.", error);
     }
-  });
-  engine = loadedEngine;
-  activeModelId = modelToLoad;
-  return engine;
+  }
 }
 
 self.addEventListener("message", async (event) => {
@@ -133,35 +153,44 @@ self.addEventListener("message", async (event) => {
       throw lastError || new Error("No se pudo cargar ningún modelo compatible.");
     }
 
-    const messages = [
-      { role: "system", content: systemPrompt },
-      ...history,
-      {
-        role: "user",
-        content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
-      }
-    ];
+    try {
+      const messages = [
+        { role: "system", content: systemPrompt },
+        ...history.slice(-4),
+        {
+          role: "user",
+          content: `Pregunta del usuario: ${question}\n\nContexto recuperado:\n${context}\n\nResponde en el idioma del usuario, con 2 a 4 oraciones y citando la sección o proyecto cuando sea relevante.`
+        }
+      ];
 
-    const stream = await modelEngine.chat.completions.create({
-      messages,
-      temperature: 0.2,
-      top_p: 0.9,
-      max_tokens: 280,
-      seed: 1234,
-      stream: true
-    });
+      const stream = await modelEngine.chat.completions.create({
+        messages,
+        temperature: 0.2,
+        top_p: 0.9,
+        max_tokens: 280,
+        seed: 1234,
+        stream: true
+      });
 
-    let response = "";
-    for await (const chunk of stream) {
-      const delta = chunk?.choices?.[0]?.delta?.content || "";
-      if (!delta) {
-        continue;
+      let response = "";
+      for await (const chunk of stream) {
+        const delta = chunk?.choices?.[0]?.delta?.content || "";
+        if (!delta) {
+          continue;
+        }
+        response += delta;
+        postMessage({ type: "token", token: delta });
       }
-      response += delta;
-      postMessage({ type: "token", token: delta });
+
+      postMessage({ type: "done", text: response.trim() || "No pude obtener una respuesta con la información disponible." });
+    } catch (error) {
+      await destroyEngine();
+      console.error("Falló la inferencia local; se liberó el motor WebLLM para permitir una inicialización limpia.", error);
+      postMessage({
+        type: "model-reset",
+        text: "El modelo se reinició por falta de memoria o por una interrupción de la GPU. Volvé a intentar la pregunta."
+      });
     }
-
-    postMessage({ type: "done", text: response.trim() || "No pude obtener una respuesta con la información disponible." });
   } catch (error) {
     console.error("Error al ejecutar el modelo local en worker.", error);
     const fallbackText = error?.message?.includes("modelos Qwen")
