@@ -665,7 +665,7 @@
                             <i id="btn-icon" class="fa-solid fa-paper-plane text-xs"></i>
                         </button>
                     </div>
-                    <p class="text-xs text-slate-500">Los mensajes se envían a facundorinaldi91@gmail.com. En el primer envío, FormSubmit puede solicitar una confirmación por correo para activar el formulario.</p>
+                    <p class="text-xs text-slate-500">Los mensajes se envían directamente a facundorinaldi91@gmail.com.</p>
                 </form>
             </div>
         </div>
@@ -922,7 +922,7 @@
                     throw new Error(result.message || `El servicio de correo respondió con el estado ${response.status}.`);
                 }
 
-                showStatus(true, "✓ Mensaje enviado. Si es el primer envío, revisa tu correo: FormSubmit puede requerir que Facundo confirme la activación del formulario.");
+                showStatus(true, "✓ ¡Mensaje enviado correctamente! Gracias por contactar a Facundo.");
                 contactForm.reset();
             } catch (error) {
                 console.error("No se pudo enviar el mensaje de contacto.", error);
