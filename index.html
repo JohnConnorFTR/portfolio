@@ -1015,7 +1015,7 @@ DATOS_PERSONALES [CV]: Edad y fecha de nacimiento no especificadas.
 
         function getAssistantWorker() {
             if (!assistantWorker) {
-                assistantWorker = new Worker("./assistant-worker.js");
+                assistantWorker = new Worker("./assistant-worker.js?v=0bd0d7b");
                 assistantWorker.addEventListener("error", (event) => {
                     console.error("Error interno en el worker del asistente.", event.error || event.message);
                     if (activeAssistantMessage) {
